@@ -2,265 +2,130 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 
-// ═══════════════════════════════════════════
-// CONFIGURAÇÕES
-// ═══════════════════════════════════════════
 const EVOLUTION_URL = process.env.EVOLUTION_URL || "https://instituto-api.onrender.com";
 const EVOLUTION_KEY = process.env.EVOLUTION_KEY || "wacrm2025";
 const INSTANCE_NAME = process.env.INSTANCE_NAME || "meu-whatapps";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
+const SUPABASE_URL = process.env.SUPABASE_URL || "https://hhrrrbzrlurjifaibmxx.supabase.co";
+const SUPABASE_KEY = process.env.SUPABASE_KEY || "sb_publishable_6g08RrC5iAEc8oxPkA-m2w__s25uees";
 const PORT = process.env.PORT || 3000;
 
-// Memória de conversas por número
 const conversas = {};
-const MAX_HIST = 10; // máximo de mensagens por conversa
+const MAX_HIST = 10;
 
-// ═══════════════════════════════════════════
-// AGENTES IA
-// ═══════════════════════════════════════════
-const AGENTES = {
-  porteiro: {
-    nome: "Porteiro",
-    prompt: `Você é o SDR especializado em Mentoria de Liderança com Constelação Familiar. 
-Qualifique leads em até 3 mensagens. Pergunte: cargo/área, maior desafio de liderança hoje, se já conhece constelação.
-Tom: acolhedor, curioso, sem pressão. Seja direto e humano. Máximo 3 parágrafos curtos.
-Responda SEMPRE em português do Brasil.`,
-  },
-  proposta: {
-    nome: "Proposta",
-    prompt: `Você cria propostas de Mentoria de Liderança e Constelação Familiar personalizadas.
-Use a dor específica do lead como âncora. Mostre transformação, não serviço.
-Inclua investimento com ancoragem de valor e ROI emocional e profissional.
-Responda SEMPRE em português do Brasil. Seja conciso para WhatsApp.`,
-  },
-  objecao: {
-    nome: "Objeção",
-    prompt: `Você contorna objeções de leads de Mentoria de Liderança.
-Use Feel-Felt-Found adaptado ao contexto de desenvolvimento humano.
-Seja empático, nunca confronte. Reframe objeções de preço como investimento em transformação.
-Responda SEMPRE em português do Brasil. Máximo 3 parágrafos.`,
-  },
-  nutricao: {
-    nome: "Nutrição",
-    prompt: `Você nutre leads frios de Mentoria de Liderança e Constelação Familiar.
-Compartilhe insights profundos, cases de transformação, perguntas reflexivas.
-Nunca venda diretamente. Crie conexão e confiança.
-Tom: sábio, acolhedor, inspirador. Máximo 2 parágrafos. Responda em português do Brasil.`,
-  },
-  closer: {
-    nome: "Closer",
-    prompt: `Você é o Closer especializado em mentorias e formações de alto valor.
-Use urgência genuína (vagas, turmas). Lembre o custo da inação. CTA claro e direto.
-Tom: confiante, caloroso, sem pressão agressiva.
-Responda SEMPRE em português do Brasil. Seja conciso para WhatsApp.`,
-  },
-};
-
-// Detecta qual agente usar baseado na mensagem
-function detectarAgente(texto, historico) {
-  const t = texto.toLowerCase();
-
-  // Sinais de objeção
-  if (t.includes("caro") || t.includes("preço") || t.includes("valor") ||
-      t.includes("desconto") || t.includes("parcel") || t.includes("não tenho") ||
-      t.includes("muito") && t.includes("dinheiro")) {
-    return "objecao";
-  }
-
-  // Sinais de compra / fechamento
-  if (t.includes("quero") || t.includes("vamos") || t.includes("fechar") ||
-      t.includes("como faço") || t.includes("pagar") || t.includes("matricul") ||
-      t.includes("quando começa") || t.includes("próxima turma")) {
-    return "closer";
-  }
-
-  // Pedido de proposta
-  if (t.includes("proposta") || t.includes("valores") || t.includes("quanto custa") ||
-      t.includes("planos") || t.includes("investimento") || t.includes("preço")) {
-    return "proposta";
-  }
-
-  // Conversa longa = nutrição
-  if (historico.length > 6) return "nutricao";
-
-  // Padrão = porteiro para qualificar
-  return "porteiro";
-}
-
-// ═══════════════════════════════════════════
-// RESPOSTA COM CLAUDE
-// ═══════════════════════════════════════════
-async function responderComClaude(numero, mensagem, agente) {
-  if (!ANTHROPIC_KEY) return responderDemo(agente, mensagem);
-
-  if (!conversas[numero]) conversas[numero] = [];
-
-  // Adiciona mensagem do usuário
-  conversas[numero].push({ role: "user", content: mensagem });
-
-  // Mantém histórico limitado
-  const hist = conversas[numero].slice(-MAX_HIST);
-
+// SUPABASE
+async function sbPost(table, body) {
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
       method: "POST",
       headers: {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
         "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_KEY,
-        "anthropic-version": "2023-06-01",
+        "Prefer": "resolution=merge-duplicates"
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 400,
-        system: AGENTES[agente].prompt,
-        messages: hist,
-      }),
+      body: JSON.stringify(body)
     });
-
-    const data = await res.json();
-    const reply = data.content?.[0]?.text || "Desculpe, tive um problema técnico. Pode repetir?";
-
-    // Adiciona resposta ao histórico
-    conversas[numero].push({ role: "assistant", content: reply });
-
-    return reply;
-  } catch (e) {
-    console.error("Erro Claude:", e.message);
-    return responderDemo(agente, mensagem);
-  }
+    if (!r.ok) console.error("SB error:", await r.text());
+  } catch(e) { console.error("SB fetch error:", e.message); }
 }
 
-// Respostas demo quando não tem API Key
-function responderDemo(agente, mensagem) {
-  const demos = {
-    porteiro: "Oi! 🌟 Obrigado por entrar em contato!\n\nSou assistente da Mentoria de Liderança. Para te ajudar melhor, me conta: qual é sua área de atuação e você lidera equipes hoje?",
-    proposta: "Que ótimo interesse! 📄\n\nVou preparar uma proposta personalizada para você. Me conta: qual é o seu maior desafio de liderança hoje e qual seria um investimento confortável para seu desenvolvimento?",
-    objecao: "Entendo completamente sua preocupação! 🙏\n\nPensa assim: quanto você perde por mês com desafios não resolvidos na liderança? Na maioria dos casos, o investimento se paga nos primeiros 60 dias.\n\nO que te faria sentir seguro para dar esse passo?",
-    nutricao: "Oi! 🌿\n\nUm insight que compartilho com líderes: 90% dos problemas de equipe têm raiz em padrões que herdamos — não em falta de técnica.\n\nComo está sua semana?",
-    closer: "Que ótimo! 🎉\n\nTenho mais 2 vagas abertas nessa turma. Posso reservar a sua agora? Te envio o link de acesso em seguida!",
-  };
-  return demos[agente] || demos.porteiro;
+async function salvarConversa(phone, name, lastMsg) {
+  const id = phone.replace(/\D/g, "");
+  await sbPost("conversations", {
+    id, phone: "+" + id, name: name || "+" + id,
+    last_msg: lastMsg, last_time: new Date().toISOString(),
+    unread: 1, updated_at: new Date().toISOString()
+  });
+  return id;
 }
 
-// ═══════════════════════════════════════════
-// ENVIAR MENSAGEM VIA EVOLUTION API
-// ═══════════════════════════════════════════
-async function enviarMensagem(numero, texto) {
+async function salvarMensagem(convId, fromMe, text) {
+  await sbPost("messages", {
+    conversation_id: convId, from_me: fromMe,
+    text, created_at: new Date().toISOString()
+  });
+}
+
+// CLAUDE
+async function chamarClaude(systemPrompt, historico, mensagemAtual) {
+  if (!ANTHROPIC_KEY) return null;
   try {
-    const res = await fetch(
-      `${EVOLUTION_URL}/message/sendText/${INSTANCE_NAME}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          apikey: EVOLUTION_KEY,
-        },
-        body: JSON.stringify({
-          number: numero,
-          text: texto,
-        }),
-      }
-    );
-    const data = await res.json();
-    console.log(`✅ Mensagem enviada para ${numero}`);
-    return data;
-  } catch (e) {
-    console.error("Erro ao enviar mensagem:", e.message);
-  }
+    const msgs = [
+      ...historico.map(h => ({ role: h.de === "lead" ? "user" : "assistant", content: h.texto })),
+      { role: "user", content: mensagemAtual }
+    ];
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 400, system: systemPrompt, messages: msgs })
+    });
+    const data = await r.json();
+    return data.content?.[0]?.text || null;
+  } catch(e) { console.error("Claude error:", e.message); return null; }
 }
 
-// ═══════════════════════════════════════════
-// WEBHOOK — RECEBE MENSAGENS DO WHATSAPP
-// ═══════════════════════════════════════════
-app.post("/webhook", async (req, res) => {
-  res.status(200).json({ ok: true }); // Responde rápido para a Evolution API
+async function enviarWhatsApp(phone, texto) {
+  try {
+    await fetch(`${EVOLUTION_URL}/message/sendText/${INSTANCE_NAME}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": EVOLUTION_KEY },
+      body: JSON.stringify({ number: phone, text: texto })
+    });
+  } catch(e) { console.error("WA send error:", e.message); }
+}
 
+const PROMPT_PORTEIRO = `Você é o SDR do Instituto Gustavo Vila Nova, especializado em Mentoria de Liderança com Constelação Familiar. 
+Qualifique leads em até 3 mensagens. Pergunte: cargo/área, maior desafio de liderança hoje, se já conhece constelação.
+Tom: acolhedor, curioso, sem pressão. Seja direto e humano. Máximo 3 parágrafos curtos.
+Nunca invente informações sobre o programa. Nunca dê preços. Crie conexão e curiosidade.`;
+
+// WEBHOOK
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200);
   try {
     const body = req.body;
+    const event = body.event || "";
+    if (!event.toLowerCase().includes("messages")) return;
 
-    // Verifica se é mensagem recebida
-    if (body.event !== "messages.upsert") return;
-    const msg = body.data?.messages?.[0];
-    if (!msg) return;
+    const data = body.data || body;
+    const msg = Array.isArray(data.messages) ? data.messages[0] : data.message || data;
+    if (!msg || !msg.key) return;
+    if (msg.key.fromMe) return;
 
-    // Ignora mensagens próprias
-    if (msg.key?.fromMe) return;
+    const remoteJid = msg.key.remoteJid || "";
+    if (remoteJid.includes("@g.us")) return;
 
-    const numero = msg.key?.remoteJid?.replace("@s.whatsapp.net", "");
-    const texto = msg.message?.conversation ||
-                  msg.message?.extendedTextMessage?.text || "";
+    const phone = remoteJid.replace("@s.whatsapp.net", "");
+    const name = msg.pushName || msg.notifyName || "+" + phone;
+    const texto = msg.message?.conversation
+      || msg.message?.extendedTextMessage?.text
+      || msg.message?.imageMessage?.caption
+      || "[mídia]";
 
-    if (!numero || !texto) return;
+    console.log(`MSG de ${name} (${phone}): ${texto}`);
 
-    console.log(`📩 Mensagem de ${numero}: ${texto.slice(0, 60)}`);
+    const convId = await salvarConversa(phone, name, texto);
+    await salvarMensagem(convId, false, texto);
 
-    // Detecta agente ideal
-    const hist = conversas[numero] || [];
-    const agente = detectarAgente(texto, hist);
-    console.log(`🤖 Agente selecionado: ${AGENTES[agente].nome}`);
+    if (!conversas[phone]) conversas[phone] = [];
+    conversas[phone].push({ de: "lead", texto });
+    if (conversas[phone].length > MAX_HIST) conversas[phone].shift();
 
-    // Gera resposta
-    const resposta = await responderComClaude(numero, texto, agente);
-
-    // Aguarda 1-2s para parecer mais humano
-    await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
-
-    // Envia resposta
-    await enviarMensagem(numero, resposta);
-
-  } catch (e) {
-    console.error("Erro no webhook:", e.message);
-  }
+    if (ANTHROPIC_KEY) {
+      const resposta = await chamarClaude(PROMPT_PORTEIRO, conversas[phone].slice(0, -1), texto);
+      if (resposta) {
+        await enviarWhatsApp(phone, resposta);
+        conversas[phone].push({ de: "agente", texto: resposta });
+        await salvarMensagem(convId, true, resposta);
+        console.log(`Resposta enviada para ${phone}`);
+      }
+    }
+  } catch(e) { console.error("Webhook error:", e.message); }
 });
 
-// ═══════════════════════════════════════════
-// ROTAS UTILITÁRIAS
-// ═══════════════════════════════════════════
-
-// Health check
-app.get("/", (req, res) => {
-  res.json({
-    status: "🟢 Online",
-    servico: "WA-CRM Webhook — Mentoria de Liderança",
-    instancia: INSTANCE_NAME,
-    conversas_ativas: Object.keys(conversas).length,
-    claude: ANTHROPIC_KEY ? "✅ Ativo" : "⚠️ Modo Demo",
-    timestamp: new Date().toISOString(),
-  });
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", supabase: SUPABASE_URL, claude: !!ANTHROPIC_KEY, ts: new Date().toISOString() });
 });
 
-// Ver conversas ativas
-app.get("/conversas", (req, res) => {
-  const resumo = Object.entries(conversas).map(([num, hist]) => ({
-    numero: num,
-    mensagens: hist.length,
-    ultima: hist[hist.length - 1]?.content?.slice(0, 60) + "...",
-  }));
-  res.json({ total: resumo.length, conversas: resumo });
-});
-
-// Limpar histórico de um número
-app.delete("/conversas/:numero", (req, res) => {
-  delete conversas[req.params.numero];
-  res.json({ ok: true, mensagem: "Histórico limpo" });
-});
-
-// Disparo manual
-app.post("/disparar", async (req, res) => {
-  const { numero, mensagem } = req.body;
-  if (!numero || !mensagem) {
-    return res.status(400).json({ erro: "numero e mensagem são obrigatórios" });
-  }
-  await enviarMensagem(numero, mensagem);
-  res.json({ ok: true, enviado_para: numero });
-});
-
-// ═══════════════════════════════════════════
-// START
-// ═══════════════════════════════════════════
-app.listen(PORT, () => {
-  console.log(`\n🚀 WA-CRM Webhook rodando na porta ${PORT}`);
-  console.log(`📡 Evolution API: ${EVOLUTION_URL}`);
-  console.log(`📱 Instância: ${INSTANCE_NAME}`);
-  console.log(`🤖 Claude: ${ANTHROPIC_KEY ? "Ativo" : "Modo Demo"}\n`);
-});
+app.listen(PORT, () => console.log(`Webhook na porta ${PORT} | Supabase OK`));
